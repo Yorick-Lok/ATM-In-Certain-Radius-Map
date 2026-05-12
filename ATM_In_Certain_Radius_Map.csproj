@@ -106,4 +106,7 @@
     </PropertyGroup>
     <Error Condition="!Exists('packages\Microsoft.Web.WebView2.1.0.3967.48\build\Microsoft.Web.WebView2.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.Web.WebView2.1.0.3967.48\build\Microsoft.Web.WebView2.targets'))" />
   </Target>
+  <PropertyGroup>
+    <WebView2LoaderPreference>Static</WebView2LoaderPreference>
+  </PropertyGroup>
 </Project>
