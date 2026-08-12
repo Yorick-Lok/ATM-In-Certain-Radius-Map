@@ -2,24 +2,331 @@
 <html>
 <head>
 
-    <!-- Display the map using HTML, CSS and JavaScript with Leaflet.js library and OpenStreetMap tiles. -->
     <title>ATM Radius Map</title>
+
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
     <style>
-        html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; }
-        #map { height:100%; width:100%; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+
+        #searchBox {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 1000000;
+        }
+
+        #searchBox .inner {
+            pointer-events: auto;
+            background: rgba(255,255,255,0.95);
+            border-radius: 10px;
+            padding: 12px;
+
+            /* SAFE COMPROMISE WIDTH (fits Toggle Circle cleanly) */
+            width: 280px;
+
+            border: 1px solid rgba(0,0,0,0.08);
+            backdrop-filter: blur(4px);
+        }
+
+        #searchInput {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            outline: none;
+        }
+
+        #searchInput:focus {
+            border-color: #888;
+        }
+
+        #suggestions {
+            margin-top: 8px;
+            max-height: 220px;
+            overflow-y: auto;
+        }
+
+        .item {
+            padding: 6px 8px;
+            cursor: pointer;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            border-radius: 4px;
+        }
+
+        .item:hover {
+            background: #f2f2f2;
+        }
+
+        input[type="range"] {
+            accent-color: #d33;
+        }
     </style>
+
 </head>
 
 <body>
-    <div id="map"></div>
 
-    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-    <script>
-        var map = L.map('map').setView([0,0],2);
-        L.tileLayer('https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',{
-            attribution:'&copy; OpenStreetMap contributors'
+<div id="map"></div>
+
+<div id="searchBox">
+    <div class="inner">
+
+        <!-- SEARCH -->
+        <input id="searchInput" placeholder="Search" />
+
+        <!-- CONTROLS ROW -->
+        <div style="margin-top:10px; display:flex; align-items:center; gap:14px;">
+
+            <!-- CHECKBOX (TEXT NOW FITS CLEANLY) -->
+            <div style="display:flex; align-items:center; gap:6px; white-space:nowrap;">
+                <input type="checkbox" id="circleToggle" checked />
+                <span>Toggle Circle</span>
+            </div>
+
+            <!-- SLIDER BLOCK -->
+            <div style="display:flex; flex-direction:column; align-items:flex-start; width:160px;">
+                <div
+                    id="radiusValue"
+                    style="
+                        width:100%;
+                        text-align:center;
+                        font-size:13px;
+                        font-weight:bold;
+                        margin-bottom:4px;
+                        ">
+                        2000 m
+                    </div>
+
+                <input
+                    id="radiusSlider"
+                    type="range"
+                    min="100"
+                    max="20000"
+                    value="2000"
+                    step="100"
+                    style="width:100%; transform: translateZ(0);"
+                />
+
+                <div style="
+                    font-size:11px;
+                    color:#777;
+                    margin-top:5px;
+                    letter-spacing:0.3px;
+                ">
+                    radius
+                </div>
+
+            </div>
+
+        </div>
+
+        <!-- SUGGESTIONS -->
+        <div id="suggestions"></div>
+
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script>
+
+    // ---------------- MAP ----------------
+    var map = L.map('map').setView([0, 0], 2);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: 'OpenStreetMap contributors'
+    }).addTo(map);
+
+    // ---------------- BRIDGE ----------------
+    function notifyHost(value) {
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage(value);
+        }
+    }
+
+    // ---------------- SEARCH ----------------
+    document.getElementById('searchInput').addEventListener('input', function () {
+        notifyHost("SEARCH|" + this.value);
+    });
+
+    // ---------------- SLIDER ----------------
+    document.getElementById('radiusSlider').addEventListener('input', function () {
+        document.getElementById('radiusValue').textContent = this.value + " m";
+        notifyHost("RADIUS|" + this.value);
+    });
+
+    // ---------------- CHECKBOX ----------------
+    document.getElementById('circleToggle').addEventListener('change', function () {
+        notifyHost("TOGGLE|" + this.checked);
+    });
+
+    // ---------------- SUGGESTIONS ----------------
+    function setSuggestions(items) {
+
+        var box = document.getElementById('suggestions');
+        box.replaceChildren();
+
+        if (!items || items.length === 0) return;
+
+        items.forEach(function (text, index) {
+
+            var div = document.createElement('div');
+            div.className = "item";
+            div.textContent = text;
+
+            div.onclick = function () {
+                document.getElementById('searchInput').value = text;
+                box.replaceChildren();
+                notifyHost("SELECT|" + index);
+            };
+
+            box.appendChild(div);
+        });
+    }
+
+    // ---------------- RADIUS CIRCLE ----------------
+    var radiusCircle = null;
+
+    function updateRadius(lat, lon, radius) {
+
+        if (radiusCircle) {
+            map.removeLayer(radiusCircle);
+        }
+
+        radiusCircle = L.circle([lat, lon], {
+            radius: radius,
+            color: 'red',
+            fillColor: '#ff0000',
+            fillOpacity: 0.15
         }).addTo(map);
-    </script>
+
+        updateVisibleATMs(lat, lon, radius);
+    }
+
+    function removeRadius() {
+
+        if (radiusCircle) {
+            map.removeLayer(radiusCircle);
+            radiusCircle = null;
+        }
+    }
+
+    // ---------------- ATM MARKERS ----------------
+
+    var atmIcon = L.icon({
+        iconUrl: "atm_marker.png",
+        iconSize: [32, 48],
+        iconAnchor: [16, 48],
+        popupAnchor: [0, -48]
+    });
+
+    var atmMarkers = [];
+
+    function loadAtms(atms) {
+
+    console.log("Received ATMs:", atms);
+
+    atmMarkers = [];
+
+    atms.forEach(function (atm) {
+
+        console.log(
+            "Adding ATM:",
+            atm.Name,
+            atm.Lat,
+            atm.Lon
+        );
+
+        var marker = L.marker(
+            [atm.Lat, atm.Lon],
+            {
+                icon: atmIcon
+            }
+        );
+
+        marker.bindPopup(atm.Name);
+
+        atmMarkers.push(marker);
+    });
+
+    console.log("Total markers:", atmMarkers.length);
+
+    // If a radius circle already exists, apply filtering now
+    if (radiusCircle) {
+
+        var center = radiusCircle.getLatLng();
+        var radius = radiusCircle.getRadius();
+
+        updateVisibleATMs(
+            center.lat,
+            center.lng,
+            radius
+        );
+    }
+}
+
+    function updateVisibleATMs(centerLat, centerLon, radius) {
+
+    console.log("Checking markers:", atmMarkers.length);
+
+    var center = L.latLng(centerLat, centerLon);
+
+    atmMarkers.forEach(function (marker) {
+
+        var distance = center.distanceTo(marker.getLatLng());
+
+        console.log(
+            "ATM distance:",
+            Math.round(distance),
+            "Radius:",
+            radius
+        );
+
+        if (distance <= radius) {
+
+            console.log("SHOW ATM");
+
+            if (!map.hasLayer(marker)) {
+                marker.addTo(map);
+            }
+
+        } else {
+
+            console.log("HIDE ATM");
+
+            if (map.hasLayer(marker)) {
+                map.removeLayer(marker);
+            }
+        }
+    });
+}
+
+    // ---------------- UI SYNC FROM C# ----------------
+    function setRadiusValue(value) {
+        document.getElementById('radiusSlider').value = value;
+        document.getElementById('radiusValue').textContent = value + " m";
+    }
+
+    // ---------------- INIT ----------------
+    loadAtms();
+
+</script>
+
 </body>
-</html>   
+</html>
